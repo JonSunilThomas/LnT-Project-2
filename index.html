@@ -46,15 +46,11 @@
 
         #widget-container {
             position: absolute;
-            top: 100px; /* Space below header */
-            left: 20px;
-            right: 20px;
+            top: 90px; /* Space below header */
+            left: 0;
+            right: 0;
+            bottom: 0;
             z-index: 5;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 15px;
-            max-height: calc(100vh - 120px);
-            overflow-y: auto;
         }
 
         .weather-widget {
@@ -66,7 +62,7 @@
             width: 280px;
             cursor: move;
             box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-            position: relative;
+            position: absolute; /* Changed for free placement */
             transition: all 0.3s ease;
             flex-shrink: 0;
         }
@@ -117,6 +113,12 @@
             font-size: 0.9rem;
             margin-bottom: 5px;
         }
+       
+        /* Hide Leaflet zoom controls */
+        .leaflet-control-zoom {
+            display: none !important;
+        }
+
     </style>
 </head>
 <body>
@@ -126,17 +128,14 @@
     <header>
         <div class="container-fluid">
             <div class="row align-items-center">
-                <div class="col-md-4">
-                    <h3 class="fw-bold mb-0">Live Weather Map</h3>
+                <div class="col-md-5">
+                    <h3 class="fw-bold mb-0">Live Weather Dashboard</h3>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-7">
                     <div class="input-group">
                         <input type="text" class="form-control" id="city-input" placeholder="Add a city widget...">
                         <button class="btn btn-primary" id="search-button">Add City</button>
                     </div>
-                </div>
-                 <div class="col-md-4 text-end">
-                    <span class="text-muted">Click widgets to see forecast</span>
                 </div>
             </div>
         </div>
@@ -164,9 +163,19 @@
             // --- IMPORTANT ---
             // Replace "YOUR_API_KEY" with your actual API key from WeatherAPI.com
             const API_KEY = "57eb71fd36d94ff68cd191931252509";
-            let cityWidgets = JSON.parse(localStorage.getItem('weatherCityWidgets')) || [];
+            let cityWidgets = JSON.parse(localStorage.getItem('weatherWidgets')) || [];
 
-            // NEW: Check if the API key is provided. If not, show a setup message.
+            // Initialize the map immediately on load
+            const map = L.map('map', { zoomControl: false }).setView([20, 0], 2); // Zoomed out view
+
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                subdomains: 'abcd',
+                maxZoom: 20
+            }).addTo(map);
+
+
+            // Now, check for the API key to enable weather functionality
             if (API_KEY === "YOUR_API_KEY" || API_KEY === "") {
                 $('#city-input, #search-button').prop('disabled', true);
                 const warningHtml = `
@@ -179,20 +188,10 @@
                         </p>
                     </div>`;
                 $('body').append(warningHtml);
-                return; // Stop the script until the key is added
+                return; 
             }
 
-            // 1. Initialize Interactive Map
-            const map = L.map('map').setView([20.5937, 78.9629], 4); // Centered on India
-
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-                subdomains: 'abcd',
-                maxZoom: 20
-            }).addTo(map);
-
-            // Function to create a weather widget
-            function createWeatherWidget(data) {
+            function createWeatherWidget(data, position) {
                 const city = data.location.name;
                 const currentData = data.current;
 
@@ -214,20 +213,72 @@
                         </div>
                         <div class="forecast-details"></div>
                     </div>`;
+                
                 const $widget = $(widgetHtml).appendTo('#widget-container');
+                
+                if (position) {
+                    $widget.css({ top: position.top, left: position.left });
+                } else {
+                    // Calculate a grid-like position for the new widget
+                    const lastWidget = $('.weather-widget').not($widget).last();
+                    const containerWidth = $('#widget-container').width();
+                    const widgetWidth = 280; // From CSS
+                    const widgetHeight = 150; // Approximate height for layout
+                    const padding = 20;
+                    
+                    let newTop = padding;
+                    let newLeft = padding;
+
+                    if (lastWidget.length) {
+                        const lastPosition = lastWidget.position();
+                        newLeft = lastPosition.left + widgetWidth + padding;
+                        newTop = lastPosition.top;
+
+                        // If it goes off-screen, move to the next row
+                        if (newLeft + widgetWidth > containerWidth) {
+                            newLeft = padding;
+                            newTop = lastPosition.top + widgetHeight + padding;
+                        }
+                    }
+                    
+                    $widget.css({ top: newTop + 'px', left: newLeft + 'px' });
+                }
+
                 $widget.data('forecast', data.forecast);
-                $widget.draggable({ containment: "body", handle: ".widget-content" });
+                $widget.draggable({
+                    containment: "body",
+                    stop: function(event, ui) {
+                        saveWidgets();
+                    }
+                });
             }
             
             function saveWidgets() {
-                 localStorage.setItem('weatherCityWidgets', JSON.stringify(cityWidgets));
+                let positions = [];
+                $('.weather-widget').each(function() {
+                    const $widget = $(this);
+                    positions.push({
+                        city: $widget.data('city'),
+                        position: $widget.position()
+                    });
+                });
+                localStorage.setItem('weatherWidgets', JSON.stringify(positions));
             }
 
-            function addCity(city) {
+            function addCity(cityData) {
+                const city = typeof cityData === 'string' ? cityData : cityData.city;
+                const position = typeof cityData === 'object' ? cityData.position : null;
+
                 const normalizedCity = city.toLowerCase();
-                if (cityWidgets.map(c => c.toLowerCase()).includes(normalizedCity)) {
+                let exists = false;
+                $('.weather-widget').each(function() {
+                    if ($(this).data('city').toLowerCase() === normalizedCity) {
+                        exists = true;
+                    }
+                });
+                if (exists) {
                     console.warn(`Widget for ${city} already exists.`);
-                    return; 
+                    return;
                 }
                 
                 const forecastUrl = `https://api.weatherapi.com/v1/forecast.json?key=${API_KEY}&q=${city}&days=6`;
@@ -235,14 +286,19 @@
                 $.get(forecastUrl)
                     .done(function(response) {
                         $('#error-message').addClass('d-none');
-                        createWeatherWidget(response);
-                        cityWidgets.push(response.location.name);
+                        createWeatherWidget(response, position);
                         saveWidgets();
                     })
                     .fail(function(jqXHR) {
                         console.error("API Error:", jqXHR.status, jqXHR.responseText);
-                        $('#error-message').removeClass('d-none');
-                        setTimeout(() => $('#error-message').addClass('d-none'), 4000);
+                        let errorText = "Could not find weather data for the specified city. Please try again.";
+
+                        if (jqXHR.status === 401 || jqXHR.status === 403) {
+                            errorText = "API Key Error: The provided key is invalid or not activated. Please check the API_KEY variable.";
+                        }
+                        
+                        $('#error-message').text(errorText).removeClass('d-none');
+                        setTimeout(() => $('#error-message').addClass('d-none'), 5000);
                     });
             }
 
@@ -258,12 +314,13 @@
                 if (e.which === 13) $('#search-button').click();
             });
             
-            $('#widget-container').on('click', '.close-btn', function() {
+            $('#widget-container').on('click', '.close-btn', function(e) {
+                e.stopPropagation();
                 const widget = $(this).closest('.weather-widget');
-                const city = widget.data('city');
-                cityWidgets = cityWidgets.filter(c => c.toLowerCase() !== city.toLowerCase());
-                saveWidgets();
-                widget.fadeOut(300, function() { $(this).remove(); });
+                widget.fadeOut(300, function() { 
+                    $(this).remove(); 
+                    saveWidgets();
+                });
             });
 
             $('#widget-container').on('click', '.widget-content', function() {
@@ -290,11 +347,11 @@
             });
 
             function initialLoad() {
-                if(cityWidgets.length === 0){
-                    cityWidgets.push("Bengaluru"); // Default city
-                    saveWidgets();
+                if (cityWidgets.length === 0) {
+                    addCity("Bengaluru"); 
+                } else {
+                    cityWidgets.forEach(addCity);
                 }
-                cityWidgets.forEach(addCity);
             }
             
             initialLoad();
@@ -303,4 +360,6 @@
 
 </body>
 </html>
+
+
 
